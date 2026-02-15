@@ -1,0 +1,512 @@
+<!DOCTYPE html>
+<html lang="sr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pang — Pongoleno</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #111;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            font-family: 'Courier New', monospace;
+            color: #fff;
+            overflow: hidden;
+        }
+        #hud {
+            width: 800px;
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+            font-size: 20px;
+            letter-spacing: 2px;
+        }
+        canvas {
+            border: 2px solid #fff;
+            display: block;
+        }
+        #info {
+            margin-top: 10px;
+            font-size: 14px;
+            color: #888;
+        }
+        .back-link {
+            position: fixed;
+            top: 15px;
+            left: 20px;
+            color: #888;
+            text-decoration: none;
+            font-family: 'Courier New', monospace;
+            font-size: 14px;
+            border: 1px solid #888;
+            padding: 6px 12px;
+            transition: all 0.2s;
+        }
+        .back-link:hover {
+            color: #fff;
+            border-color: #fff;
+        }
+    </style>
+</head>
+<body>
+    <a href="index.html" class="back-link">← MENI</a>
+    <div id="hud">
+        <span>NIVO: <span id="levelDisplay">1</span></span>
+        <span>POENI: <span id="scoreDisplay">0</span></span>
+        <span>ŽIVOTI: <span id="livesDisplay">3</span></span>
+    </div>
+    <canvas id="game" width="800" height="500"></canvas>
+    <div id="info">← → kretanje  |  SPACE pucanje  |  P pauza  |  ESC meni</div>
+
+    <script>
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+    const W = canvas.width;
+    const H = canvas.height;
+    const FLOOR_Y = H - 10;
+
+    // Game state
+    let level = 1;
+    let score = 0;
+    let lives = 3;
+    let paused = false;
+    let gameOver = false;
+    let levelComplete = false;
+    let levelTimer = 0;
+    let invincible = false;
+    let invincibleTimer = 0;
+    const INVINCIBLE_FRAMES = 90; // 1.5 seconds
+    let animationId;
+
+    // Colors for ball sizes
+    const BALL_COLORS = ['#ff4444', '#ff8800', '#ffdd00', '#44ff44', '#4488ff'];
+
+    // Ball sizes: radius for each tier (0=largest, 4=smallest)
+    const BALL_RADII = [50, 35, 24, 16, 10];
+    // Points: bigger balls give more points
+    const BALL_POINTS = [500, 300, 200, 100, 50];
+
+    // Player
+    const player = {
+        x: W / 2,
+        y: FLOOR_Y - 24,
+        w: 20,
+        h: 32,
+        speed: 2.5,
+        facing: 0,       // -1 left, 0 none, 1 right
+        animFrame: 0,
+        animTimer: 0,
+        shooting: false,
+        shootTimer: 0
+    };
+
+    // Pixel character drawing
+    function drawPixelChar(x, y, state, frame, facing) {
+        const s = 2; // pixel scale
+        const cx = Math.floor(x);
+        const cy = Math.floor(y);
+
+        // Colors
+        const skin = '#ffcc88';
+        const hair = '#884422';
+        const shirt = '#4488ff';
+        const pants = '#2244aa';
+        const shoes = '#222';
+        const eye = '#111';
+
+        // Head
+        ctx.fillStyle = hair;
+        ctx.fillRect(cx - 5*s, cy - 16*s, 10*s, 3*s);  // hair
+        ctx.fillStyle = skin;
+        ctx.fillRect(cx - 4*s, cy - 13*s, 8*s, 6*s);    // face
+        // Eyes
+        ctx.fillStyle = eye;
+        if (facing >= 0) ctx.fillRect(cx + 1*s, cy - 11*s, s, 2*s);
+        if (facing <= 0) ctx.fillRect(cx - 2*s, cy - 11*s, s, 2*s);
+
+        // Body / shirt
+        ctx.fillStyle = shirt;
+        ctx.fillRect(cx - 4*s, cy - 7*s, 8*s, 7*s);
+
+        // Arms
+        ctx.fillStyle = skin;
+        if (state === 'shoot') {
+            // Both arms up when shooting
+            ctx.fillRect(cx - 6*s, cy - 7*s, 2*s, 2*s);  // left shoulder
+            ctx.fillRect(cx + 4*s, cy - 7*s, 2*s, 2*s);  // right shoulder
+            ctx.fillRect(cx - s, cy - 9*s, 2*s, 2*s);     // hands up
+        } else {
+            // Arms at sides, slight swing when walking
+            const armSwing = (state === 'walk') ? Math.sin(frame * 0.8) * 2*s : 0;
+            ctx.fillRect(cx - 6*s, cy - 5*s + armSwing, 2*s, 5*s);
+            ctx.fillRect(cx + 4*s, cy - 5*s - armSwing, 2*s, 5*s);
+        }
+
+        // Pants
+        ctx.fillStyle = pants;
+        ctx.fillRect(cx - 4*s, cy, 3*s, 5*s);       // left leg
+        ctx.fillRect(cx + 1*s, cy, 3*s, 5*s);        // right leg
+
+        // Legs animation
+        ctx.fillStyle = shoes;
+        if (state === 'walk') {
+            const legOffset = Math.sin(frame * 0.8) * 2*s;
+            ctx.fillRect(cx - 4*s + legOffset, cy + 5*s, 3*s, 2*s);
+            ctx.fillRect(cx + 1*s - legOffset, cy + 5*s, 3*s, 2*s);
+        } else {
+            ctx.fillRect(cx - 4*s, cy + 5*s, 3*s, 2*s);
+            ctx.fillRect(cx + 1*s, cy + 5*s, 3*s, 2*s);
+        }
+
+        // Idle breathing
+        if (state === 'idle') {
+            const breathe = Math.sin(Date.now() / 400) * s * 0.5;
+            ctx.fillStyle = shirt;
+            ctx.fillRect(cx - 4*s, cy - 7*s + breathe, 8*s, 1*s);
+        }
+    }
+
+    // Harpoon (wire)
+    let harpoons = [];
+    const HARPOON_SPEED = 4;
+    const MAX_HARPOONS = 1;
+
+    // Balls
+    let balls = [];
+
+    const keys = {};
+
+    function initLevel(lvl) {
+        balls = [];
+        harpoons = [];
+        player.x = W / 2;
+        levelComplete = false;
+        invincible = false;
+        invincibleTimer = 0;
+
+        const numBalls = Math.min(lvl, 4);
+        const startTier = Math.max(0, 2 - Math.floor(lvl / 3));
+
+        for (let i = 0; i < numBalls; i++) {
+            const x = (W / (numBalls + 1)) * (i + 1);
+            balls.push(createBall(x, 80, startTier, (i % 2 === 0 ? 1 : -1)));
+        }
+    }
+
+    function createBall(x, y, tier, dirX) {
+        const speed = 0.75 + (4 - tier) * 0.2 + level * 0.075;
+        return {
+            x: x,
+            y: y,
+            tier: tier,
+            r: BALL_RADII[tier],
+            vx: dirX * speed,
+            vy: 0,
+            gravity: 0.075,
+            bounce: -1 * (6.5 - tier * 0.4),
+            color: BALL_COLORS[tier]
+        };
+    }
+
+    function update() {
+        if (paused || gameOver) return;
+
+        // Level transition timer
+        if (levelComplete) {
+            levelTimer--;
+            if (levelTimer <= 0) {
+                level++;
+                initLevel(level);
+                updateHUD();
+            }
+            return;
+        }
+
+        // Invincibility countdown
+        if (invincible) {
+            invincibleTimer--;
+            if (invincibleTimer <= 0) {
+                invincible = false;
+            }
+        }
+
+        // Player movement
+        const movingLeft = keys['ArrowLeft'] || keys['a'] || keys['A'];
+        const movingRight = keys['ArrowRight'] || keys['d'] || keys['D'];
+        if (movingLeft) { player.x -= player.speed; player.facing = -1; }
+        else if (movingRight) { player.x += player.speed; player.facing = 1; }
+        else { player.facing = 0; }
+        player.x = Math.max(player.w / 2, Math.min(W - player.w / 2, player.x));
+
+        // Animation timer
+        if (movingLeft || movingRight) {
+            player.animTimer++;
+            player.animFrame = player.animTimer;
+        } else {
+            player.animTimer = 0;
+            player.animFrame = 0;
+        }
+
+        // Shoot animation timer
+        if (player.shooting) {
+            player.shootTimer--;
+            if (player.shootTimer <= 0) player.shooting = false;
+        }
+
+        // Update harpoons
+        for (let i = harpoons.length - 1; i >= 0; i--) {
+            harpoons[i].tipY -= HARPOON_SPEED;
+            if (harpoons[i].tipY < 0) {
+                harpoons.splice(i, 1);
+            }
+        }
+
+        // Update balls
+        for (let b of balls) {
+            b.vy += b.gravity;
+            b.x += b.vx;
+            b.y += b.vy;
+
+            // Wall bounce
+            if (b.x - b.r < 0) {
+                b.x = b.r;
+                b.vx = Math.abs(b.vx);
+            }
+            if (b.x + b.r > W) {
+                b.x = W - b.r;
+                b.vx = -Math.abs(b.vx);
+            }
+
+            // Floor bounce
+            if (b.y + b.r > FLOOR_Y) {
+                b.y = FLOOR_Y - b.r;
+                b.vy = b.bounce;
+            }
+
+            // Ceiling
+            if (b.y - b.r < 0) {
+                b.y = b.r;
+                b.vy = Math.abs(b.vy);
+            }
+        }
+
+        // Harpoon-ball collision
+        for (let i = harpoons.length - 1; i >= 0; i--) {
+            let hit = false;
+            for (let j = balls.length - 1; j >= 0; j--) {
+                const h = harpoons[i];
+                const b = balls[j];
+                if (!h || !b) continue;
+
+                // Harpoon is a vertical line from (h.x, h.baseY) down to (h.x, h.tipY)
+                // Check if ball center is close enough horizontally
+                // and if ball vertically overlaps with the harpoon line
+                if (Math.abs(b.x - h.x) < b.r + 2 &&
+                    b.y + b.r > h.tipY &&
+                    b.y - b.r < h.baseY) {
+                    // Hit!
+                    score += BALL_POINTS[b.tier];
+                    harpoons.splice(i, 1);
+
+                    // Split ball
+                    if (b.tier < BALL_RADII.length - 1) {
+                        const newTier = b.tier + 1;
+                        balls.push(createBall(b.x - 15, b.y, newTier, -1));
+                        balls.push(createBall(b.x + 15, b.y, newTier, 1));
+                    }
+                    balls.splice(j, 1);
+                    hit = true;
+                    break;
+                }
+            }
+            if (hit) break;
+        }
+
+        // Ball-player collision (skip if invincible)
+        if (!invincible) {
+            const pLeft = player.x - player.w / 2;
+            const pRight = player.x + player.w / 2;
+            const pTop = player.y - player.h / 2;
+            const pBottom = player.y + player.h / 2;
+
+            for (let b of balls) {
+                // Find closest point on player rect to ball center
+                const closestX = Math.max(pLeft, Math.min(b.x, pRight));
+                const closestY = Math.max(pTop, Math.min(b.y, pBottom));
+                const dx = b.x - closestX;
+                const dy = b.y - closestY;
+
+                if (dx * dx + dy * dy < b.r * b.r) {
+                    lives--;
+                    updateHUD();
+                    if (lives <= 0) {
+                        gameOver = true;
+                    } else {
+                        player.x = W / 2;
+                        harpoons = [];
+                        invincible = true;
+                        invincibleTimer = INVINCIBLE_FRAMES;
+                    }
+                    return;
+                }
+            }
+        }
+
+        // Level complete
+        if (balls.length === 0) {
+            levelComplete = true;
+            levelTimer = 120;
+        }
+
+        updateHUD();
+    }
+
+    function draw() {
+        // Background
+        ctx.fillStyle = '#111';
+        ctx.fillRect(0, 0, W, H);
+
+        // Floor
+        ctx.fillStyle = '#333';
+        ctx.fillRect(0, FLOOR_Y, W, H - FLOOR_Y);
+
+        // Balls
+        for (let b of balls) {
+            ctx.beginPath();
+            ctx.arc(b.x, b.y, b.r, 0, Math.PI * 2);
+            ctx.fillStyle = b.color;
+            ctx.fill();
+
+            // Shine effect
+            ctx.beginPath();
+            ctx.arc(b.x - b.r * 0.25, b.y - b.r * 0.25, b.r * 0.3, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(255,255,255,0.2)';
+            ctx.fill();
+        }
+
+        // Harpoons (wire from base to tip)
+        ctx.strokeStyle = '#4488ff';
+        ctx.lineWidth = 3;
+        for (let h of harpoons) {
+            ctx.beginPath();
+            ctx.moveTo(h.x, h.baseY);
+            ctx.lineTo(h.x, h.tipY);
+            ctx.stroke();
+
+            // Arrow tip
+            ctx.fillStyle = '#4488ff';
+            ctx.beginPath();
+            ctx.moveTo(h.x, h.tipY - 6);
+            ctx.lineTo(h.x - 4, h.tipY + 2);
+            ctx.lineTo(h.x + 4, h.tipY + 2);
+            ctx.closePath();
+            ctx.fill();
+        }
+
+        // Player (blink when invincible)
+        if (!invincible || Math.floor(invincibleTimer / 5) % 2 === 0) {
+            let state = 'idle';
+            if (player.shooting) state = 'shoot';
+            else if (player.facing !== 0) state = 'walk';
+            drawPixelChar(player.x, player.y, state, player.animFrame, player.facing);
+        }
+
+        // Overlays
+        if (paused) {
+            drawOverlay('PAUZA', '');
+        }
+
+        if (gameOver) {
+            drawOverlay('GAME OVER', 'Poeni: ' + score + '  |  ENTER — ponovo  |  ESC — meni');
+        }
+
+        if (levelComplete) {
+            drawOverlay('NIVO ' + level + ' ZAVRŠEN!', '');
+        }
+    }
+
+    function drawOverlay(title, subtitle) {
+        ctx.fillStyle = 'rgba(0,0,0,0.6)';
+        ctx.fillRect(0, 0, W, H);
+        ctx.fillStyle = '#fff';
+        ctx.font = '48px Courier New';
+        ctx.textAlign = 'center';
+        ctx.fillText(title, W / 2, H / 2 - 10);
+        if (subtitle) {
+            ctx.font = '18px Courier New';
+            ctx.fillText(subtitle, W / 2, H / 2 + 30);
+        }
+    }
+
+    function updateHUD() {
+        document.getElementById('levelDisplay').textContent = level;
+        document.getElementById('scoreDisplay').textContent = score;
+        document.getElementById('livesDisplay').textContent = lives;
+    }
+
+    function gameLoop() {
+        update();
+        draw();
+        animationId = requestAnimationFrame(gameLoop);
+    }
+
+    function resetGame() {
+        level = 1;
+        score = 0;
+        lives = 3;
+        gameOver = false;
+        paused = false;
+        invincible = false;
+        invincibleTimer = 0;
+        updateHUD();
+        initLevel(level);
+    }
+
+    document.addEventListener('keydown', (e) => {
+        keys[e.key] = true;
+
+        if (e.key === ' ' && !paused && !gameOver && !levelComplete) {
+            if (harpoons.length < MAX_HARPOONS) {
+                harpoons.push({
+                    x: player.x,
+                    baseY: player.y - player.h / 2,
+                    tipY: player.y - player.h / 2
+                });
+                player.shooting = true;
+                player.shootTimer = 20;
+            }
+            e.preventDefault();
+        }
+
+        if (e.key === 'p' || e.key === 'P') {
+            if (!gameOver && !levelComplete) paused = !paused;
+        }
+
+        if (e.key === 'Escape') {
+            cancelAnimationFrame(animationId);
+            window.location.href = 'index.html';
+        }
+
+        if (e.key === 'Enter' && gameOver) {
+            resetGame();
+        }
+
+        if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', ' '].includes(e.key)) {
+            e.preventDefault();
+        }
+    });
+
+    document.addEventListener('keyup', (e) => {
+        keys[e.key] = false;
+    });
+
+    // Start
+    initLevel(level);
+    gameLoop();
+    </script>
+</body>
+</html>
